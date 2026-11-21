@@ -4,7 +4,9 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -74,6 +76,7 @@ class ConsentClientTest {
             storage = FileStorage(storageDir),
             clock = Clock { now },
             executors = Executors(work = { it.run() }, callbacks = { it.run() }, schedule = { delay, _ -> scheduled.add(delay) }),
+            allowLocalHttp = true,
         )
 
     private fun records() = requests.filter { it.path == "/v1/app/records" }
@@ -82,20 +85,21 @@ class ConsentClientTest {
     fun `chave e endereço são conferidos sem rede`() {
         for (bad in listOf("", "trusto_sk_live_" + "A".repeat(43), "trusto_pk_prod_" + "A".repeat(32), "trusto_pk_live_curta", key + "x")) {
             try {
-                ConsentClient(bad, endpoint, app, UrlConnectionTransport(), FileStorage(dir), Clock { now }, Executors({ it.run() }, { it.run() }, { _, _ -> }))
+                ConsentClient(bad, endpoint, app, UrlConnectionTransport(), FileStorage(dir), Clock { now }, Executors({ it.run() }, { it.run() }, { _, _ -> }), allowLocalHttp = true)
                 fail("aceitou $bad")
             } catch (e: ConsentException.InvalidKey) {
                 // esperado
             }
         }
         assertTrue(Rules.isValidKey("trusto_pk_test_" + "a-_9".repeat(8)))
-        try {
-            Rules.normalizeEndpoint("http://consent.example")
-            fail("aceitou http fora do aparelho")
-        } catch (e: IllegalArgumentException) {
-            // esperado
+        expect<ConsentException.InvalidEndpoint> { Rules.normalizeEndpoint("http://consent.example", allowLocalHttp = true) }
+        // http no aparelho ou no emulador só em app debuggable.
+        for (local in listOf("http://127.0.0.1:8080", "http://localhost", "http://10.0.2.2:8080")) {
+            expect<ConsentException.InvalidEndpoint> { Rules.normalizeEndpoint(local, allowLocalHttp = false) }
+            assertEquals(local, Rules.normalizeEndpoint(local, allowLocalHttp = true))
         }
-        assertEquals("https://consent.example", Rules.normalizeEndpoint("https://consent.example/"))
+        expect<ConsentException.InvalidEndpoint> { Rules.normalizeEndpoint("https://u:p@consent.example", allowLocalHttp = false) }
+        assertEquals("https://consent.example", Rules.normalizeEndpoint("https://consent.example/", allowLocalHttp = false))
         assertTrue(requests.isEmpty())
     }
 
@@ -187,8 +191,9 @@ class ConsentClientTest {
         assertNotNull(decision.expiresAtMs)
         assertNull(decision.pendingId)
         assertEquals(0, sdk.pendingCount)
-        // Um aviso pela decisão local, outro pelo recibo.
-        assertEquals(2, heard.size)
+        // O aviso de quando o listener entrou (sem decisão), um pela decisão local, outro pelo recibo.
+        assertEquals(3, heard.size)
+        assertNull(heard[0])
         assertTrue(sdk.isGranted("analytics"))
         assertFalse(sdk.isGranted("marketing"))
 
@@ -200,15 +205,17 @@ class ConsentClientTest {
     }
 
     @Test
-    fun `202 e erros terminais descartam, sem reenviar`() {
+    fun `202, 400, 403 e 413 descartam, sem reenviar`() {
         respond("/v1/app/records", 202 to """{"discarded":true}""")
         val sdk = client()
         sdk.loadConfigBlocking()
         sdk.acceptAll()
         assertEquals(0, sdk.pendingCount)
-        respond("/v1/app/records", 400 to """{"error":"categories_mismatch"}""")
-        sdk.rejectAll()
-        assertEquals(0, sdk.pendingCount)
+        for ((status, body) in listOf(400 to """{"error":"categories_mismatch"}""", 403 to """{"error":"app_mismatch"}""", 413 to """{"error":"payload_too_large"}""")) {
+            respond("/v1/app/records", status to body)
+            sdk.rejectAll()
+            assertEquals("$status descarta", 0, sdk.pendingCount)
+        }
         assertTrue(scheduled.isEmpty())
         // Sem recibo, a decisão local continua valendo.
         assertEquals(ConsentAction.REJECT_ALL, sdk.currentDecision!!.action)
@@ -322,6 +329,148 @@ class ConsentClientTest {
     }
 
     @Test
+    fun `decisão vencida concede só as obrigatórias`() {
+        respond("/v1/app/records", 202 to """{"discarded":true}""")
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        assertTrue(sdk.isGranted("analytics"))
+        now += 366L * 86_400_000
+        assertFalse(sdk.isGranted("analytics"))
+        assertTrue(sdk.isGranted("necessary"))
+    }
+
+    @Test
+    fun `401 e 404 no envio esperam no mínimo 1 hora e o item fica na fila`() {
+        for (status in listOf(401, 404)) {
+            scheduled.clear()
+            respond("/v1/app/records", status to """{"error":"x"}""")
+            val sdk = client(Files.createTempDirectory("trusto-$status").toFile())
+            sdk.loadConfigBlocking()
+            sdk.acceptAll()
+            assertEquals("$status fica na fila", 1, sdk.pendingCount)
+            assertEquals(listOf(ConsentClient.LONG_RETRY_MS), scheduled)
+            // Dentro do teto de 30 dias, a chave voltou e a prova sai.
+            respond("/v1/app/records", 201 to """{"consentId":"c0ffee00-0000-4000-8000-000000000010","expiresAt":"2027-11-21T00:00:00.000Z"}""")
+            now += ConsentClient.LONG_RETRY_MS
+            sdk.flushBlocking()
+            assertEquals(0, sdk.pendingCount)
+        }
+    }
+
+    @Test
+    fun `401 e 404 seguidos saem da fila no teto de 30 dias`() {
+        respond("/v1/app/records", 401 to """{"error":"invalid_app_key"}""")
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        now += 31L * 86_400_000
+        sdk.flushBlocking()
+        assertEquals(0, sdk.pendingCount)
+    }
+
+    @Test
+    fun `listener recebe a decisão atual na hora`() {
+        val sdk = client()
+        val seen = mutableListOf<ConsentDecision?>()
+        sdk.addListener { seen.add(it) }
+        assertEquals(listOf<ConsentDecision?>(null), seen)
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        val again = mutableListOf<ConsentDecision?>()
+        sdk.addListener { again.add(it) }
+        assertEquals(ConsentAction.ACCEPT_ALL, again.first()!!.action)
+    }
+
+    @Test
+    fun `depois de 409, decidir sem recarregar o banner é recusado`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        respond("/v1/app/records", 409 to """{"error":"config_outdated","version":4}""")
+        sdk.acceptAll()
+        expect<ConsentException.ConfigNotLoaded> { sdk.rejectAll() }
+        expect<ConsentException.ConfigNotLoaded> { sdk.save(mapOf("analytics" to true)) }
+    }
+
+    @Test
+    fun `falha de disco não sai da API e a decisão vale em memória`() {
+        val broken = object : Storage {
+            override fun read(name: String): String? = throw java.io.IOException("disco")
+            override fun write(name: String, value: String) = throw java.io.IOException("disco cheio")
+            override fun delete(name: String) = throw java.io.IOException("disco")
+        }
+        val sdk = ConsentClient(key, endpoint, app, UrlConnectionTransport(2_000, 2_000), broken, Clock { now },
+            Executors({ it.run() }, { it.run() }, { delay, _ -> scheduled.add(delay) }), allowLocalHttp = true)
+        sdk.loadConfigBlocking()
+        val first = sdk.visitorId
+        val decision = sdk.acceptAll()
+        assertEquals(ConsentAction.ACCEPT_ALL, sdk.currentDecision!!.action)
+        assertEquals(decision.configVersion, 3)
+        assertEquals("o identificador não muda sem disco", first, sdk.visitorId)
+        assertEquals(first, JsonObject.parse(records().last().body).string("visitorId"))
+    }
+
+    @Test
+    fun `arquivo corrompido ou de versão desconhecida é descartado sem derrubar`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        File(dir, "decision.json").writeText("{corrompido")
+        File(dir, "queue.json").writeText("""{"v":99,"data":[]}""")
+        File(dir, "config.json").writeText("""{"v":2,"data":{}}""")
+        val next = client()
+        assertNull(next.currentDecision)
+        assertEquals(0, next.pendingCount)
+        assertNull(next.lastConfig)
+        assertTrue(next.needsConsent)
+    }
+
+    @Test
+    fun `arquivos persistidos levam a versão de formato`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        for (name in listOf("config", "decision", "queue")) {
+            val root = Json.parse(File(dir, "$name.json").readText()) as Map<*, *>
+            assertEquals("$name com v", 1L, (root["v"] as Number).toLong())
+        }
+    }
+
+    @Test
+    fun `FileStorage grava por troca de nome e não deixa temporário`() {
+        val sub = File(dir, "sub")
+        val storage = FileStorage(sub)
+        assertFalse("construir não cria nem falha", sub.exists())
+        storage.write("decision", "um")
+        storage.write("decision", "dois")
+        assertEquals("dois", storage.read("decision"))
+        assertFalse(File(sub, "decision.tmp").exists())
+        storage.delete("decision")
+        assertNull(storage.read("decision"))
+        expect<IllegalArgumentException> { storage.write("../fora", "x") }
+    }
+
+    @Test
+    fun `configure repetido reaproveita a instância ou encerra a anterior`() {
+        val slot = ClientSlot()
+        var created = 0
+        val make = { k: String -> { created += 1; ConsentClient(k, endpoint, app, UrlConnectionTransport(2_000, 2_000), FileStorage(dir), Clock { now },
+            Executors({ it.run() }, { it.run() }, { delay, _ -> scheduled.add(delay) }), allowLocalHttp = true) } }
+        val first = slot.obtain(key, endpoint, true, make(key))
+        assertSame(first, slot.obtain(key, "$endpoint/", true, make(key)))
+        assertEquals(1, created)
+        val otherKey = "trusto_pk_live_" + "B".repeat(32)
+        val second = slot.obtain(otherKey, endpoint, true, make(otherKey))
+        assertNotSame(first, second)
+        // A anterior encerrada não envia mais nada.
+        first.loadConfigBlocking()
+        val before = records().size
+        first.acceptAll()
+        first.flushBlocking()
+        assertEquals(before, records().size)
+    }
+
+    @Test
     fun `sistema e modelo saem dentro do que o coletor aceita`() {
         assertEquals("Android 15 beta", Rules.sanitize("Android 15 <beta>", 40))
         assertEquals("Galaxy S24 Ultra", Rules.sanitize("Galaxy\tS24 ™ Ultra 🚀", 60))
@@ -329,7 +478,7 @@ class ConsentClientTest {
         assertNull(Rules.sanitize("🚀🚀", 60))
         assertNull(Rules.sanitize(null, 60))
 
-        val odd = ConsentClient(key, endpoint, AppInfo("br.com.loja.app", "0.1.0", "Android 15 \u0000", "🚀"), UrlConnectionTransport(), FileStorage(dir), Clock { now }, Executors({ it.run() }, { it.run() }, { _, _ -> }))
+        val odd = ConsentClient(key, endpoint, AppInfo("br.com.loja.app", "0.1.0", "Android 15 \u0000", "🚀"), UrlConnectionTransport(), FileStorage(dir), Clock { now }, Executors({ it.run() }, { it.run() }, { _, _ -> }), allowLocalHttp = true)
         odd.loadConfigBlocking()
         odd.acceptAll()
         val appBody = JsonObject.parse(records().last().body).obj("app").raw()

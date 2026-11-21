@@ -14,17 +14,21 @@ internal object Rules {
 
     fun isValidKey(key: String): Boolean = KEY_PATTERN.matches(key)
 
-    /** O endereço do coletor: https, ou http só para o próprio aparelho (testes e desenvolvimento local). */
-    fun normalizeEndpoint(raw: String): String {
+    /**
+     * O endereço do coletor: sempre https. `http` só para o próprio aparelho ou o emulador
+     * (localhost, 127.0.0.1, 10.0.2.2) e só quando o app hospedeiro é debuggable: num aparelho
+     * real, 10.0.2.2 é um endereço da rede local.
+     */
+    fun normalizeEndpoint(raw: String, allowLocalHttp: Boolean): String {
         val url = try {
             java.net.URI(raw.trim())
         } catch (e: Exception) {
-            throw IllegalArgumentException("endereço do coletor inválido")
+            throw ConsentException.InvalidEndpoint()
         }
         val local = url.host == "127.0.0.1" || url.host == "localhost" || url.host == "10.0.2.2"
-        require(url.scheme == "https" || (url.scheme == "http" && local)) { "o coletor precisa ser https" }
-        require(!url.host.isNullOrEmpty() && url.rawQuery == null && url.rawFragment == null && url.rawUserInfo == null) {
-            "endereço do coletor inválido"
+        val schemeOk = url.scheme == "https" || (url.scheme == "http" && local && allowLocalHttp)
+        if (!schemeOk || url.host.isNullOrEmpty() || url.rawQuery != null || url.rawFragment != null || url.rawUserInfo != null) {
+            throw ConsentException.InvalidEndpoint()
         }
         return raw.trim().trimEnd('/')
     }

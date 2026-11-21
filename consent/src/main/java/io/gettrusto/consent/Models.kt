@@ -171,10 +171,13 @@ public sealed class ConsentException(message: String) : Exception(message) {
     /** A chave é de outro aplicativo ou de outra plataforma. */
     public class AppMismatch : ConsentException("a chave é de outro aplicativo")
 
+    /** O endereço do coletor não é https (http só para o aparelho, em app debuggable). */
+    public class InvalidEndpoint : ConsentException("endereço do coletor inválido: use https")
+
     /** `configure` ainda não foi chamado. */
     public class NotConfigured : ConsentException("TrustoConsent.configure não foi chamado")
 
-    /** A decisão pede o banner, e nenhum foi carregado ainda (`loadConfig`). */
+    /** A decisão pede o banner, e nenhum foi carregado ainda, ou o carregado mudou no coletor (`loadConfig`). */
     public class ConfigNotLoaded : ConsentException("banner não carregado: chame loadConfig antes")
 
     /** Categoria que o banner não tem, ou obrigatória recusada. */

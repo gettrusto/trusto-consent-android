@@ -1,6 +1,7 @@
 package io.gettrusto.consent
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -21,7 +22,7 @@ import kotlin.coroutines.suspendCoroutine
  * TrustoConsent.loadConfig { result -> … }   // ou: val config = TrustoConsent.awaitConfig()
  * if (TrustoConsent.needsConsent) { /* mostrar a tela do aplicativo */ }
  * TrustoConsent.acceptAll()                  // rejectAll(), save(mapOf(...)), revoke()
- * TrustoConsent.addListener { decision -> analytics.enabled = TrustoConsent.isGranted("analytics") }
+ * TrustoConsent.addListener { _ -> analytics.enabled = TrustoConsent.isGranted("analytics") }
  * ```
  *
  * A decisão vale no aparelho na hora; o registro vai ao coletor em segundo plano e é
@@ -34,44 +35,53 @@ public object TrustoConsent {
     /** Versão deste SDK, enviada em cada registro. */
     public const val SDK_VERSION: String = BuildConfig.SDK_VERSION
 
-    @Volatile
-    private var client: ConsentClient? = null
+    private val slot = ClientSlot()
+    private val client: ConsentClient? get() = slot.current
     private var scheduler: ScheduledExecutorService? = null
 
     /**
      * Prepara o SDK. Chame uma vez, no `Application.onCreate`. A chave é a publicável do
      * aplicativo (aba Aplicativos, em Consentimentos): não é segredo e pode ir no código.
+     * Chamar de novo com a mesma chave e o mesmo endereço não faz nada; com outros, encerra
+     * a instância anterior (reenvio agendado e listeners) e começa outra.
      *
      * @throws ConsentException.InvalidKey se a chave não tiver o formato `trusto_pk_…`.
+     * @throws ConsentException.InvalidEndpoint se o endereço não for https.
      */
     @JvmStatic
     @JvmOverloads
     @Synchronized
     public fun configure(context: Context, publishableKey: String, endpoint: String = DEFAULT_ENDPOINT) {
         val app = context.applicationContext
+        val key = publishableKey.trim()
+        // `http` para o aparelho ou o emulador só em app debuggable: em produção, só https.
+        val debuggable = (app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val worker = scheduler ?: JavaExecutors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "trusto-consent").apply { isDaemon = true }
         }.also { scheduler = it }
         val main = Handler(Looper.getMainLooper())
         val dir = File(app.noBackupFilesDir, "trusto-consent")
-        client = ConsentClient(
-            key = publishableKey.trim(),
-            endpoint = endpoint,
-            app = AppInfo(
-                packageName = app.packageName,
-                sdkVersion = SDK_VERSION,
-                os = "Android ${Build.VERSION.RELEASE}",
-                device = Build.MODEL,
-            ),
-            transport = UrlConnectionTransport(),
-            storage = FileStorage(dir),
-            clock = Clock { System.currentTimeMillis() },
-            executors = Executors(
-                work = worker,
-                callbacks = { task -> main.post(task) },
-                schedule = { delay, task -> worker.schedule(task, delay, TimeUnit.MILLISECONDS) },
-            ),
-        ).also { it.flush() }
+        slot.obtain(key, endpoint, debuggable) {
+            ConsentClient(
+                key = key,
+                endpoint = endpoint,
+                app = AppInfo(
+                    packageName = app.packageName,
+                    sdkVersion = SDK_VERSION,
+                    os = "Android ${Build.VERSION.RELEASE}",
+                    device = Build.MODEL,
+                ),
+                transport = UrlConnectionTransport(),
+                storage = FileStorage(dir),
+                clock = Clock { System.currentTimeMillis() },
+                executors = Executors(
+                    work = worker,
+                    callbacks = { task -> main.post(task) },
+                    schedule = { delay, task -> worker.schedule(task, delay, TimeUnit.MILLISECONDS) },
+                ),
+                allowLocalHttp = debuggable,
+            )
+        }.flush()
     }
 
     private fun requireClient(): ConsentClient = client ?: throw ConsentException.NotConfigured()
@@ -107,7 +117,7 @@ public object TrustoConsent {
     @JvmStatic
     public val needsConsent: Boolean get() = requireClient().needsConsent
 
-    /** A categoria está concedida? Obrigatórias sempre; sem decisão, só elas. */
+    /** A categoria está concedida? Obrigatórias sempre; opcionais só com decisão dentro do prazo. */
     @JvmStatic
     public fun isGranted(category: String): Boolean = requireClient().isGranted(category)
 
@@ -125,7 +135,10 @@ public object TrustoConsent {
     @JvmStatic
     public fun revoke(): ConsentDecision = requireClient().revoke()
 
-    /** Chamado na thread principal a cada decisão nova, recibo do coletor ou banner novo. */
+    /**
+     * Chamado na thread principal com a decisão atual logo ao registrar, e depois a cada
+     * decisão nova, recibo do coletor ou banner novo.
+     */
     @JvmStatic
     public fun addListener(listener: (ConsentDecision?) -> Unit) {
         requireClient().addListener(listener)
@@ -145,4 +158,24 @@ public object TrustoConsent {
     /** Identificador aleatório deste aparelho no consentimento: é o que o titular informa num pedido. */
     @JvmStatic
     public val visitorId: String get() = requireClient().visitorId
+}
+
+/**
+ * A instância em uso. `configure` repetido com a mesma chave e o mesmo endereço a reaproveita;
+ * com outros, a nova entra e a anterior é encerrada, para duas instâncias nunca enviarem a
+ * mesma fila.
+ */
+internal class ClientSlot {
+    @Volatile
+    var current: ConsentClient? = null
+        private set
+
+    @Synchronized
+    fun obtain(key: String, endpoint: String, allowLocalHttp: Boolean, create: () -> ConsentClient): ConsentClient {
+        current?.let { if (it.sameAs(key, endpoint, allowLocalHttp)) return it }
+        val next = create()
+        current?.close()
+        current = next
+        return next
+    }
 }

@@ -37,6 +37,11 @@ android {
 
 kotlin {
     jvmToolchain(17)
+    compilerOptions {
+        // Sem as checagens de nulidade geradas em cada chamada: o teto de 100 KB do AAR. A
+        // API pública confere a entrada ela mesma (chave, endereço, escolhas).
+        freeCompilerArgs.addAll("-Xno-param-assertions", "-Xno-call-assertions", "-Xno-receiver-assertions")
+    }
 }
 
 dependencies {

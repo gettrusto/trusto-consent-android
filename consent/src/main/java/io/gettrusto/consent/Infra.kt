@@ -7,7 +7,7 @@ import java.net.URL
 import java.util.concurrent.Executor
 
 /** Uma resposta HTTP já lida. */
-internal data class HttpResponse(val status: Int, val body: String)
+internal class HttpResponse(val status: Int, val body: String)
 
 /** O transporte até o coletor. Injetável: os testes usam um servidor local. */
 internal interface Transport {
@@ -84,22 +84,23 @@ internal interface Storage {
 /**
  * Um arquivo por nome, numa pasta só do SDK. No Android a pasta fica em `noBackupFilesDir`:
  * privada do aplicativo e fora do backup, então o identificador do visitante não vai para
- * outro aparelho. Escrita atômica por arquivo temporário e troca de nome.
+ * outro aparelho. Escrita atômica por arquivo temporário e troca de nome. A pasta é criada
+ * na primeira gravação: construir nunca falha.
  */
 internal class FileStorage(private val dir: File) : Storage {
-    init {
-        if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory) throw IOException("pasta do SDK não criada: $dir")
-    }
-
     override fun read(name: String): String? = file(name).takeIf { it.isFile }?.readText(Charsets.UTF_8)
 
     override fun write(name: String, value: String) {
+        if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) throw IOException("pasta do SDK não criada")
         val target = file(name)
         val temp = File(dir, "$name.tmp")
         temp.writeText(value, Charsets.UTF_8)
         if (!temp.renameTo(target)) {
             target.delete()
-            if (!temp.renameTo(target)) throw IOException("não foi possível gravar $name")
+            if (!temp.renameTo(target)) {
+                temp.delete()
+                throw IOException("não foi possível gravar $name")
+            }
         }
     }
 
@@ -110,6 +111,35 @@ internal class FileStorage(private val dir: File) : Storage {
     private fun file(name: String): File {
         require(name.matches(Regex("[a-z_]+"))) { "nome inválido" }
         return File(dir, "$name.json")
+    }
+}
+
+/**
+ * O armazenamento como o núcleo o usa: nenhuma falha de disco (cheio, sem permissão, erro de
+ * I/O) sai daqui e derruba o aplicativo. Leitura que falha conta como ausente; gravação que
+ * falha deixa o estado só em memória até a próxima gravação.
+ */
+internal class SafeStorage(private val inner: Storage) : Storage {
+    override fun read(name: String): String? = try {
+        inner.read(name)
+    } catch (e: Exception) {
+        null
+    }
+
+    override fun write(name: String, value: String) {
+        try {
+            inner.write(name, value)
+        } catch (e: Exception) {
+            // Sem disco, a decisão segue em memória; a próxima gravação tenta de novo.
+        }
+    }
+
+    override fun delete(name: String) {
+        try {
+            inner.delete(name)
+        } catch (e: Exception) {
+            // Idem.
+        }
     }
 }
 

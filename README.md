@@ -38,6 +38,8 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         TrustoConsent.configure(this, "trusto_pk_live_...")
+        // Chamado na hora com a decisão atual (mesmo sem nenhuma) e depois a cada mudança:
+        // os SDKs de terceiros já começam no estado certo.
         TrustoConsent.addListener { applyConsent() }
     }
 
@@ -68,18 +70,33 @@ Com corrotinas, `TrustoConsent.awaitConfig()` faz o mesmo que `loadConfig`.
 
 | Chamada | O que faz |
 |---|---|
-| `configure(context, chave, endpoint)` | Prepara o SDK. Chame uma vez, no `Application`. `endpoint` serve para testar em outro ambiente |
+| `configure(context, chave, endpoint)` | Prepara o SDK e retoma o envio do que ficou pendente. Chame no `Application`; repetir com a mesma chave e o mesmo endereço não faz nada. `endpoint` serve para testar em outro ambiente e precisa ser https (http só para o aparelho ou o emulador, em app debuggable) |
 | `loadConfig { }` / `awaitConfig()` | O banner publicado. Cache de 60 s; sem rede, o último salvo |
 | `needsConsent` | `true` sem decisão, com banner de outra versão ou com a decisão vencida |
-| `acceptAll()`, `rejectAll()`, `save(map)`, `revoke()` | Grava a decisão. Vale no aparelho na hora e é enviada em segundo plano |
+| `acceptAll()`, `rejectAll()`, `save(map)`, `revoke()` | Grava a decisão. Vale no aparelho na hora e é enviada em segundo plano. Depois que o banner muda no servidor, pedem um `loadConfig` novo antes (`ConfigNotLoaded`) |
 | `decision` | A decisão em vigor, com o recibo (`consentId`) quando o envio foi confirmado |
-| `isGranted(chave)` | Se a finalidade está concedida. Sem decisão, só as obrigatórias |
-| `addListener { }` | Avisado na thread principal a cada decisão, recibo ou banner novo |
+| `isGranted(chave)` | Se a finalidade está concedida. Obrigatórias sempre; opcionais só com decisão dentro do prazo |
+| `addListener { }` | Avisado na thread principal na hora, com a decisão atual, e depois a cada decisão, recibo ou banner novo |
 | `flush()` | Tenta enviar agora o que estiver pendente |
 | `visitorId` | O identificador que o titular informa num pedido de direitos |
 
-Os erros são `ConsentException`: `InvalidKey`, `KeyRejected`, `AppMismatch`,
-`NotConfigured`, `ConfigNotLoaded`, `InvalidChoice` e `Unavailable`.
+Os erros são `ConsentException`: `InvalidKey`, `InvalidEndpoint`, `KeyRejected`,
+`AppMismatch`, `NotConfigured`, `ConfigNotLoaded`, `InvalidChoice` e `Unavailable`. Nenhuma
+outra exceção sai do SDK: uma falha de disco (cheio, sem permissão) mantém a decisão em
+memória, sem derrubar o aplicativo.
+
+## Envio e reenvio
+
+- A decisão vale no aparelho na hora; o registro vai ao servidor numa thread do SDK.
+- Sem rede, servidor fora do ar ou limite de chamadas, o registro fica numa fila no aparelho
+  e é reenviado com espera crescente, de 5 s até 1 h. Se a chave for recusada por um tempo
+  (por exemplo, enquanto a posse do aplicativo é reconferida), a espera começa em 1 h.
+- A fila guarda até 50 registros e nenhum com mais de 30 dias.
+- O reenvio automático vale enquanto o processo do aplicativo está vivo. Quando o aplicativo
+  abre de novo, o `configure` retoma a fila.
+- Se o processo morrer entre a confirmação do servidor e a retirada do item da fila, o
+  registro é reenviado ao abrir de novo e a decisão fica gravada duas vezes no servidor: uma
+  duplicata da mesma decisão, nunca uma decisão inventada.
 
 ## Quem desenha a tela responde por ela
 
@@ -110,7 +127,13 @@ aparelho.
 ./gradlew :consent:testDebugUnitTest :consent:assembleRelease
 ```
 
-O build de release falha se o AAR passar de 100 KB.
+O build de release falha se o AAR passar de 100 KB. As dependências do build são conferidas
+contra `gradle/verification-metadata.xml`, e o `gradle-wrapper.jar` é validado no CI antes de
+qualquer `./gradlew`. Depois de mudar uma dependência, regenere o arquivo:
+
+```bash
+./gradlew --write-verification-metadata sha256 :consent:testDebugUnitTest :consent:assembleRelease
+```
 
 ## Pendências
 
