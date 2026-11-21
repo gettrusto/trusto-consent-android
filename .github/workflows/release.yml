@@ -1,0 +1,57 @@
+name: Release
+
+# Publicação de uma versão. Só manual e só da `main`.
+#
+# Antes de rodar pela primeira vez:
+# - proteção de branch na `main` com revisão obrigatória e environment `release` com
+#   aprovador (débito #120): sem isso, um push direto chegaria aos aplicativos dos clientes;
+# - conta no repositório central de pacotes, com segundo fator, e o namespace verificado;
+# - segredos do environment `release`: SIGNING_KEY (chave privada em ASCII), SIGNING_PASSWORD,
+#   REPOSITORY_USERNAME e REPOSITORY_PASSWORD. Nenhum segredo fica no repositório.
+#
+# A etapa de envio ao repositório central é ligada quando a conta existir.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease --no-daemon
+      - name: Assinar o AAR
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo "SIGNING_KEY ausente"; exit 1; }
+          echo "$SIGNING_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$SIGNING_PASSWORD" \
+            --armor --detach-sign consent/build/outputs/aar/consent-release.aar
+      # Proveniência verificável do artefato, ligada a este commit e a este workflow.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: consent/build/outputs/aar/consent-release.aar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: consent-release
+          path: |
+            consent/build/outputs/aar/consent-release.aar
+            consent/build/outputs/aar/consent-release.aar.asc
