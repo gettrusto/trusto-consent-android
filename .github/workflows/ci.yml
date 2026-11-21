@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions fixadas por SHA, com a versão em comentário: o SDK vai dentro do app de todos
+      # os clientes, e uma tag movida não pode trocar o que roda aqui.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # O `gradle-wrapper.jar` versionado é conferido antes de qualquer `./gradlew`.
+      - uses: gradle/actions/wrapper-validation@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4.4.3
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4.4.3
+      # Testes na JVM e o AAR de release, que falha acima de 100 KB. As dependências do build
+      # são conferidas contra `gradle/verification-metadata.xml`.
+      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease --no-daemon
