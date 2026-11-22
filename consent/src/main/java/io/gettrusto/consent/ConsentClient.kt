@@ -143,6 +143,9 @@ internal class ConsentClient(
         val current = decision ?: return false
         if (clock.nowMs() >= current.effectiveExpiresAtMs) return false
         if (current.configVersion != knownVersion(current)) return false
+        // 409 sem a versão nova no corpo: o banner da decisão saiu do ar, mesmo sem saber qual
+        // entrou. Como o -1 do iOS, as opcionais esperam a pessoa decidir de novo.
+        if (config?.stale == true && config?.config?.version == current.configVersion) return false
         current.categories[category] == true
     }
 

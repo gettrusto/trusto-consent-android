@@ -123,7 +123,17 @@ class BannerView(
     private fun link(label: String, url: String) = text(label, 14f).apply {
         setTextColor(primary)
         paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
-        setOnClickListener { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
+        // O leitor de tela anuncia como link, não como texto solto.
+        contentDescription = "$label, link"
+        isClickable = true
+        // Só https e só no navegador: a URL vem da configuração da organização, e um app de
+        // verdade não deve abrir outro esquema (intent:, file:, content:) a partir dela.
+        setOnClickListener {
+            val uri = Uri.parse(url)
+            if (uri.scheme == "https") {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)) }
+            }
+        }
     }
 
     private fun filled(label: String, onClick: () -> Unit) = button(label, onClick).apply {

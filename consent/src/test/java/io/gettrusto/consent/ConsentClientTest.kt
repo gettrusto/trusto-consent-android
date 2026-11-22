@@ -437,6 +437,16 @@ class ConsentClientTest {
     }
 
     @Test
+    fun `409 sem versão no corpo também desliga as opcionais`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        respond("/v1/app/records", 409 to """{"error":"config_outdated"}""")
+        sdk.acceptAll()
+        assertFalse(sdk.isGranted("analytics"))
+        assertTrue(sdk.isGranted("necessary"))
+    }
+
+    @Test
     fun `409 com versão nova desliga as opcionais antes de recarregar o banner`() {
         val sdk = client()
         sdk.loadConfigBlocking()
