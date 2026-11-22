@@ -173,8 +173,14 @@ internal class ClientSlot {
     @Synchronized
     fun obtain(key: String, endpoint: String, allowLocalHttp: Boolean, create: () -> ConsentClient): ConsentClient {
         current?.let { if (it.sameAs(key, endpoint, allowLocalHttp)) return it }
-        val next = create()
+        // Valida antes de encerrar a anterior: chave ou endereço inválidos a mantêm em uso.
+        if (!Rules.isValidKey(key)) throw ConsentException.InvalidKey()
+        Rules.normalizeEndpoint(endpoint, allowLocalHttp)
+        // Encerra antes de criar: a anterior não grava mais nada, e a limpeza de escopo da nova
+        // roda depois de tudo que a anterior já enfileirou.
         current?.close()
+        current = null
+        val next = create()
         current = next
         return next
     }

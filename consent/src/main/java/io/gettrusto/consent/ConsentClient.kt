@@ -35,7 +35,13 @@ internal class ConsentClient(
     allowLocalHttp: Boolean = false,
 ) {
     private val endpoint = Rules.normalizeEndpoint(endpoint, allowLocalHttp)
-    private val storage = SafeStorage(storage)
+    /** Instância encerrada não grava mais: a que a substituiu é a dona dos arquivos. */
+    private val storage: Storage = SafeStorage(storage).let { inner ->
+        object : Storage by inner {
+            override fun write(name: String, value: String) { if (!closed) inner.write(name, value) }
+            override fun delete(name: String) { if (!closed) inner.delete(name) }
+        }
+    }
     private val lock = Any()
     private val listeners = CopyOnWriteArrayList<(ConsentDecision?) -> Unit>()
 
@@ -54,7 +60,29 @@ internal class ConsentClient(
     init {
         if (!Rules.isValidKey(key)) throw ConsentException.InvalidKey()
         synchronized(lock) {
-            config = Persisted.read(this.storage, CONFIG)?.let { runCatching { CachedConfig.fromJson(JsonObject(it.asMap())) }.getOrNull() }
+            // Banner, decisão e fila valem para um ambiente da chave (teste ou produção). Trocar
+            // de ambiente na mesma instalação (só acontece em desenvolvimento) descarta o que veio
+            // do outro: decidir sobre o banner dele, ou mandar a fila dele com a chave nova,
+            // gravaria prova na organização errada. Trocar de coletor descarta só o banner em
+            // cache: a fila e a decisão continuam, para uma mudança de endereço numa versão nova
+            // nunca apagar prova ainda não enviada. A rotação da chave mantém tudo.
+            // A limpeza dos arquivos vai para a fila de trabalho, depois de toda gravação já
+            // enfileirada pela instância anterior; aqui, o que é do outro escopo nem é lido.
+            val env = envOf(key)
+            val collector = collectorOf(this.endpoint)
+            val previousEnv = this.storage.read(SCOPE_ENV)
+            val previousCollector = this.storage.read(SCOPE_COLLECTOR)
+            val otherEnv = previousEnv != null && previousEnv != env
+            val otherCollector = otherEnv || (previousCollector != null && previousCollector != collector)
+            if (previousEnv != env || previousCollector != collector) {
+                persist {
+                    if (otherEnv) for (name in listOf(DECISION, QUEUE)) this.storage.delete(name)
+                    if (otherCollector) for (name in listOf(CONFIG, OUTDATED)) this.storage.delete(name)
+                    this.storage.write(SCOPE_ENV, env)
+                    this.storage.write(SCOPE_COLLECTOR, collector)
+                }
+            }
+            config =Persisted.read(this.storage, CONFIG)?.let { runCatching { CachedConfig.fromJson(JsonObject(it.asMap())) }.getOrNull() }
             decision = Persisted.read(this.storage, DECISION)?.let { runCatching { ConsentDecision.fromJson(JsonObject(it.asMap())) }.getOrNull() }
             queue = Persisted.read(this.storage, QUEUE)?.let { data ->
                 runCatching { (data as List<*>).map { QueuedRecord.fromJson(JsonObject((it as Map<*, *>).asMap())) } }.getOrNull()
@@ -413,6 +441,17 @@ internal class ConsentClient(
         const val DECISION = "decision"
         const val QUEUE = "queue"
         const val OUTDATED = "outdated"
+        const val SCOPE_ENV = "scope_env"
+        const val SCOPE_COLLECTOR = "scope_collector"
+
+        /** Ambiente da chave, nunca a chave inteira: a rotação não muda o escopo. */
+        fun envOf(key: String): String = Rules.KEY_PATTERN.find(key)?.groupValues?.get(1) ?: "unknown"
+
+        /** O coletor sem diferença de maiúsculas no esquema e no host. */
+        fun collectorOf(endpoint: String): String = runCatching {
+            val uri = java.net.URI(endpoint)
+            "${uri.scheme.lowercase()}://${uri.host.lowercase()}${if (uri.port >= 0) ":${uri.port}" else ""}${uri.rawPath.orEmpty().trimEnd('/')}"
+        }.getOrDefault(endpoint)
 
         /** 5 s, 10 s, 20 s... até 1 h. */
         fun backoff(attempts: Int): Long {

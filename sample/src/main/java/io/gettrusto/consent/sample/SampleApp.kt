@@ -19,9 +19,9 @@ class SampleApp : Application() {
             context.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(USE_LOCAL, false)
 
         fun currentEndpoint(context: Context): String =
-            if (usesLocal(context)) BuildConfig.LOCAL_ENDPOINT else BuildConfig.TRUSTO_ENDPOINT
+            if (usesLocal(context) || BuildConfig.TRUSTO_ENDPOINT.isEmpty()) BuildConfig.LOCAL_ENDPOINT else BuildConfig.TRUSTO_ENDPOINT
 
-        /** Troca entre o coletor configurado (staging) e o falso da máquina local. */
+        /** Troca entre o coletor configurado e o falso da máquina local. */
         fun toggleEndpoint(context: Context): String {
             val next = !usesLocal(context)
             context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(USE_LOCAL, next).apply()

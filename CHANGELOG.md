@@ -11,5 +11,8 @@
 - `isGranted`: obrigatórias sempre, opcionais só com decisão dentro do prazo.
 - `addListener` avisa na hora com a decisão atual; `configure` repetido reaproveita a instância.
 - Falha de disco nunca sai da API; arquivos com versão de formato.
+- Banner, decisão e fila separados por ambiente da chave: trocar de teste para produção (ou o
+  contrário) na mesma instalação descarta o que veio do outro. Trocar de coletor descarta só o
+  banner em cache, e a rotação da chave mantém tudo.
 - Endereço só https (http só para o aparelho ou o emulador, em app debuggable).
 - Build com actions fixadas por SHA, wrapper validado e dependências verificadas.

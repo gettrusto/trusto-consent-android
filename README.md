@@ -28,8 +28,8 @@ dependencies {
 }
 ```
 
-> A publicação no repositório central de pacotes ainda não foi feita. Até lá, use o AAR
-> gerado por `./gradlew :consent:assembleRelease`.
+Os pacotes no Maven Central são assinados com a chave cuja impressão está no
+[SECURITY.md](SECURITY.md).
 
 ## Uso
 
@@ -92,6 +92,10 @@ memória, sem derrubar o aplicativo.
   e é reenviado com espera crescente, de 5 s até 1 h. Se a chave for recusada por um tempo
   (por exemplo, enquanto a posse do aplicativo é reconferida), a espera começa em 1 h.
 - A fila guarda até 50 registros e nenhum com mais de 30 dias.
+- Banner, decisão e fila valem para um ambiente da chave (teste ou produção). Trocar de
+  ambiente na mesma instalação descarta o que veio do outro. Trocar de coletor descarta só o
+  banner em cache; a fila segue para o coletor novo. A rotação da chave mantém tudo, e a fila
+  sai com a chave nova.
 - O reenvio automático vale enquanto o processo do aplicativo está vivo. Quando o aplicativo
   abre de novo, o `configure` retoma a fila.
 - Se o processo morrer entre a confirmação do servidor e a retirada do item da fila, o
@@ -146,7 +150,7 @@ A chave e o coletor vêm do `local.properties`, que fica fora do git:
 
 ```properties
 trusto.sample.key=trusto_pk_test_...
-# opcional, o padrão é o coletor de staging
+# sem ele, o app usa só o coletor falso local
 trusto.sample.endpoint=https://...
 ```
 
@@ -177,8 +181,7 @@ lançamento, a partir da `main`, com aprovação obrigatória e tags imutáveis.
 
 ## Pendências
 
-- **Publicação**: conta no repositório central de pacotes e chave de assinatura, antes do
-  primeiro lançamento.
+- **Publicação**: a primeira versão (0.1.0) ainda não foi lançada no Maven Central.
 
 ## Licença
 

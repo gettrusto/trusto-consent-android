@@ -24,6 +24,6 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4.4.3
-      # Testes na JVM e o AAR de release, que falha acima de 100 KB. As dependências do build
+      # Testes na JVM, o AAR de release, que falha acima de 100 KB, e o app de teste. As dependências do build
       # são conferidas contra `gradle/verification-metadata.xml`.
-      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease --no-daemon
+      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease :sample:assembleDebug --no-daemon

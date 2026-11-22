@@ -13,7 +13,7 @@ plugins {
  * repositório:
  *
  *   trusto.sample.key=trusto_pk_test_...
- *   trusto.sample.endpoint=https://...   (padrão: o coletor de staging)
+ *   trusto.sample.endpoint=https://...   (sem ele, só o coletor falso local)
  *
  * Sem chave, o app usa uma chave falsa no formato certo, e o coletor responde 401.
  */
@@ -23,8 +23,14 @@ val localProps = Properties().apply {
 fun sampleProp(name: String, default: String): String =
     providers.gradleProperty(name).orNull ?: localProps.getProperty(name) ?: default
 
-val stagingEndpoint = "https://trusto-staging-consent-collector-77mizweawa-ue.a.run.app"
 val placeholderKey = "trusto_pk_test_" + "0".repeat(32)
+// Os valores vão para o BuildConfig gerado: só o formato esperado, sem aspas nem escape.
+val sampleKey = sampleProp("trusto.sample.key", placeholderKey).also {
+    require(Regex("^trusto_pk_(test|live)_[A-Za-z0-9_-]{32}$").matches(it)) { "trusto.sample.key fora do formato" }
+}
+val sampleEndpoint = sampleProp("trusto.sample.endpoint", "").also {
+    require(it.isEmpty() || Regex("^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$").matches(it)) { "trusto.sample.endpoint fora do formato" }
+}
 
 android {
     namespace = "io.gettrusto.consent.sample"
@@ -36,8 +42,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "TRUSTO_KEY", "\"${sampleProp("trusto.sample.key", placeholderKey)}\"")
-        buildConfigField("String", "TRUSTO_ENDPOINT", "\"${sampleProp("trusto.sample.endpoint", stagingEndpoint)}\"")
+        buildConfigField("String", "TRUSTO_KEY", "\"$sampleKey\"")
+        // Vazio: o app usa só o coletor falso local.
+        buildConfigField("String", "TRUSTO_ENDPOINT", "\"$sampleEndpoint\"")
         // Coletor falso na máquina de desenvolvimento (`sample/tools/mock-collector.py`), visto
         // do emulador em 10.0.2.2. O SDK só aceita http para esse endereço em app debuggable.
         buildConfigField("String", "LOCAL_ENDPOINT", "\"http://10.0.2.2:8787\"")
