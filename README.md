@@ -75,7 +75,7 @@ Com corrotinas, `TrustoConsent.awaitConfig()` faz o mesmo que `loadConfig`.
 | `needsConsent` | `true` sem decisão, com banner de outra versão ou com a decisão vencida |
 | `acceptAll()`, `rejectAll()`, `save(map)`, `revoke()` | Grava a decisão. Vale no aparelho na hora e é enviada em segundo plano. Depois que o banner muda no servidor, pedem um `loadConfig` novo antes (`ConfigNotLoaded`) |
 | `decision` | A decisão em vigor, com o recibo (`consentId`) quando o envio foi confirmado |
-| `isGranted(chave)` | Se a finalidade está concedida. Obrigatórias sempre; opcionais só com decisão dentro do prazo |
+| `isGranted(chave)` | Se a finalidade está concedida. Obrigatórias sempre; opcionais só com decisão dentro do prazo e sobre a versão do banner no ar: banner republicado desliga as opcionais até a pessoa decidir de novo |
 | `addListener { }` | Avisado na thread principal na hora, com a decisão atual, e depois a cada decisão, recibo ou banner novo |
 | `flush()` | Tenta enviar agora o que estiver pendente |
 | `visitorId` | O identificador que o titular informa num pedido de direitos |
@@ -145,6 +145,11 @@ O módulo `sample/` é um aplicativo de teste (`io.gettrusto.consent.sample`) qu
 banner publicado e chama o SDK nos botões: aceitar tudo, recusar tudo, salvar por
 finalidade, revogar e enviar agora, com o estado de `isGranted` e da fila na tela. Ele nunca
 é publicado: o lançamento monta só o `:consent`.
+
+O banner do app de teste (`BannerView`) é um exemplo de como desenhar a tela no modo sem tela:
+cores, cantos e posição vêm do banner publicado, os textos são do app, e ele aparece sozinho
+quando `needsConsent` é verdadeiro. "Preferências de privacidade" reabre a escolha por
+finalidade.
 
 A chave e o coletor vêm do `local.properties`, que fica fora do git:
 

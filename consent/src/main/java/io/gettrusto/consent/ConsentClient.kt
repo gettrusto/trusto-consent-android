@@ -126,18 +126,26 @@ internal class ConsentClient(
     val needsConsent: Boolean
         get() = synchronized(lock) {
             val current = decision ?: return true
-            val known = maxOf(config?.config?.version ?: current.configVersion, outdatedVersion ?: 0)
-            current.configVersion != known || clock.nowMs() >= current.effectiveExpiresAtMs
+            current.configVersion != knownVersion(current) || clock.nowMs() >= current.effectiveExpiresAtMs
         }
 
+    /** A última versão do banner que o SDK conhece, inclusive a que o coletor disse num 409. */
+    private fun knownVersion(current: ConsentDecision): Int =
+        maxOf(config?.config?.version ?: current.configVersion, outdatedVersion ?: 0)
+
     /**
-     * Obrigatórias, sempre concedidas. Opcionais, só com decisão dentro do prazo: vencida a
-     * decisão, o app desliga o que é opcional até a pessoa decidir de novo.
+     * Obrigatórias, sempre concedidas. Opcionais, só com decisão dentro do prazo e sobre a
+     * versão do banner que está no ar: vencida a decisão, ou publicada outra versão do banner,
+     * o app desliga o que é opcional até a pessoa decidir de novo.
      */
     fun isGranted(category: String): Boolean = synchronized(lock) {
         if (config?.config?.categories?.any { it.key == category && it.required } == true) return true
         val current = decision ?: return false
         if (clock.nowMs() >= current.effectiveExpiresAtMs) return false
+        if (current.configVersion != knownVersion(current)) return false
+        // 409 sem a versão nova no corpo: o banner da decisão saiu do ar, mesmo sem saber qual
+        // entrou. Como o -1 do iOS, as opcionais esperam a pessoa decidir de novo.
+        if (config?.stale == true && config?.config?.version == current.configVersion) return false
         current.categories[category] == true
     }
 

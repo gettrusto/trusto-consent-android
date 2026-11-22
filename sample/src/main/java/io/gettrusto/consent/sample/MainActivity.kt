@@ -9,6 +9,7 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -33,6 +34,8 @@ class MainActivity : Activity() {
     private lateinit var stateText: TextView
     private lateinit var logText: TextView
     private val checks = LinkedHashMap<String, CheckBox>()
+    /** Camada por cima da tela, onde o banner aparece na posição publicada. */
+    private lateinit var bannerHost: FrameLayout
     private val log = ArrayDeque<String>()
     private val clock = SimpleDateFormat("HH:mm:ss", Locale.ROOT)
 
@@ -58,7 +61,7 @@ class MainActivity : Activity() {
             button("Recusar tudo") { decide("rejectAll") { TrustoConsent.rejectAll() } }))
         root.addView(row(button("Salvar escolhas") { decide("save") { TrustoConsent.save(choices()) } },
             button("Revogar") { decide("revoke") { TrustoConsent.revoke() } }))
-        root.addView(row(button("Trocar coletor") { toggleEndpoint() }))
+        root.addView(row(button("Preferências de privacidade") { showBanner(preferences = true) }, button("Trocar coletor") { toggleEndpoint() }))
 
         root.addView(section("Estado"))
         stateText = text("", 13f, mono = true).also(root::addView)
@@ -66,7 +69,11 @@ class MainActivity : Activity() {
         root.addView(section("Eventos"))
         logText = text("", 12f, mono = true).also(root::addView)
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        bannerHost = FrameLayout(this)
+        setContentView(FrameLayout(this).apply {
+            addView(ScrollView(this@MainActivity).apply { addView(root) })
+            addView(bannerHost, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        })
         TrustoConsent.addListener(listener)
         TrustoConsent.config?.let(::showConfig)
         refreshState()
@@ -85,6 +92,8 @@ class MainActivity : Activity() {
                 .onSuccess { config ->
                     addLog("banner versão ${config.version}, ${config.categories.size} finalidades")
                     showConfig(config)
+                    // Como um app de verdade: sem decisão válida para este banner, ele aparece.
+                    if (TrustoConsent.needsConsent) showBanner(preferences = false)
                 }
                 .onFailure { error -> addLog("loadConfig falhou: ${describe(error)}") }
             refreshState()
@@ -95,6 +104,7 @@ class MainActivity : Activity() {
         try {
             val decision = action()
             addLog("$name: ${decision.action}, ${decision.categories}")
+            hideBanner()
         } catch (e: ConsentException) {
             addLog("$name falhou: ${describe(e)}")
         }
@@ -119,6 +129,30 @@ class MainActivity : Activity() {
     }
 
     private fun choices(): Map<String, Boolean> = checks.mapValues { it.value.isChecked }
+
+    private fun showBanner(preferences: Boolean) {
+        val config = TrustoConsent.config ?: return addLog("banner ainda não carregado")
+        bannerHost.removeAllViews()
+        bannerHost.addView(
+            BannerView(
+                context = this,
+                config = config,
+                current = TrustoConsent.decision?.categories.orEmpty(),
+                onAcceptAll = { decide("acceptAll") { TrustoConsent.acceptAll() } },
+                onRejectAll = { decide("rejectAll") { TrustoConsent.rejectAll() } },
+                onSave = { chosen -> decide("save") { TrustoConsent.save(chosen) } },
+                // Reaberto pelas preferências, fecha sem decidir; na primeira vez, só decidindo.
+                onClose = if (preferences) ({ hideBanner() }) else null,
+                startInPreferences = preferences,
+            ),
+            FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT),
+        )
+    }
+
+    private fun hideBanner() {
+        bannerHost.removeAllViews()
+        TrustoConsent.config?.let(::showConfig)
+    }
 
     private fun showConfig(config: ConsentConfig) {
         bannerText.text = buildString {
