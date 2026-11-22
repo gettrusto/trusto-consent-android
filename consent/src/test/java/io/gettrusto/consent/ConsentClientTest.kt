@@ -418,6 +418,34 @@ class ConsentClientTest {
     }
 
     @Test
+    fun `banner novo desliga as opcionais até a pessoa decidir de novo`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        sdk.acceptAll()
+        assertTrue(sdk.isGranted("analytics"))
+
+        // O banner é republicado na versão 4: a decisão sobre a 3 não libera mais as opcionais.
+        respond("/v1/app/config", 200 to configJson.replace("\"version\":3", "\"version\":4"))
+        now += 61_000
+        sdk.loadConfigBlocking()
+        assertTrue(sdk.needsConsent)
+        assertFalse(sdk.isGranted("analytics"))
+        assertTrue(sdk.isGranted("necessary"))
+
+        sdk.acceptAll()
+        assertTrue(sdk.isGranted("analytics"))
+    }
+
+    @Test
+    fun `409 com versão nova desliga as opcionais antes de recarregar o banner`() {
+        val sdk = client()
+        sdk.loadConfigBlocking()
+        respond("/v1/app/records", 409 to """{"error":"config_outdated","version":5}""")
+        sdk.acceptAll()
+        assertFalse(sdk.isGranted("analytics"))
+    }
+
+    @Test
     fun `decisão vencida concede só as obrigatórias`() {
         respond("/v1/app/records", 202 to """{"discarded":true}""")
         val sdk = client()

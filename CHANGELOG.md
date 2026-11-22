@@ -8,7 +8,8 @@
 - Identificador aleatório do visitante fora do backup; nenhum identificador do aparelho.
 - Reenvio com espera crescente; 401 e 404 no envio esperam a partir de 1 h; só 400, 403 e 413
   descartam.
-- `isGranted`: obrigatórias sempre, opcionais só com decisão dentro do prazo.
+- `isGranted`: obrigatórias sempre, opcionais só com decisão dentro do prazo e sobre a versão do
+  banner no ar: banner republicado desliga as opcionais até a pessoa decidir de novo.
 - `addListener` avisa na hora com a decisão atual; `configure` repetido reaproveita a instância.
 - Falha de disco nunca sai da API; arquivos com versão de formato.
 - Banner, decisão e fila separados por ambiente da chave: trocar de teste para produção (ou o
