@@ -14,7 +14,7 @@ import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 /**
- * Consentimento LGPD no aplicativo, sem tela (ADR 0135, modo "sem tela"): o aplicativo
+ * Consentimento LGPD no aplicativo, no modo sem tela: o aplicativo
  * desenha a própria tela com o banner publicado e o SDK grava a decisão como prova.
  *
  * ```

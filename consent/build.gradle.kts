@@ -45,7 +45,7 @@ kotlin {
 }
 
 dependencies {
-    // Em runtime, só a plataforma e a stdlib do Kotlin (ADR 0135): nada que o app do cliente
+    // Em runtime, só a plataforma e a stdlib do Kotlin: nada que o app do cliente
     // precise conciliar com as próprias versões.
     testImplementation("junit:junit:4.13.2")
 }

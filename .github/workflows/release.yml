@@ -3,8 +3,8 @@ name: Release
 # Publicação de uma versão. Só manual e só da `main`.
 #
 # Antes de rodar pela primeira vez:
-# - proteção de branch na `main` com revisão obrigatória e environment `release` com
-#   aprovador (débito #120): sem isso, um push direto chegaria aos aplicativos dos clientes;
+# - proteções já configuradas no GitHub: `main` só por PR com o CI verde, environment
+#   `release` só da `main` e com aprovador obrigatório, tags imutáveis;
 # - conta no repositório central de pacotes, com segundo fator, e o namespace verificado;
 # - segredos do environment `release`: SIGNING_KEY (chave privada em ASCII), SIGNING_PASSWORD,
 #   REPOSITORY_USERNAME e REPOSITORY_PASSWORD. Nenhum segredo fica no repositório.

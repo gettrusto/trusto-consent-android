@@ -135,8 +135,16 @@ qualquer `./gradlew`. Depois de mudar uma dependência, regenere o arquivo:
 ./gradlew --write-verification-metadata sha256 :consent:testDebugUnitTest :consent:assembleRelease
 ```
 
+## Segurança
+
+Vulnerabilidades: veja [SECURITY.md](SECURITY.md). A publicação sai só pela pipeline de
+lançamento, a partir da `main`, com aprovação obrigatória e tags imutáveis.
+
 ## Pendências
 
-- **Licença**: a definir antes da primeira publicação.
-- **Publicação**: conta no repositório central de pacotes, chave de assinatura e proteção de
-  branch com revisão obrigatória, antes do primeiro lançamento.
+- **Publicação**: conta no repositório central de pacotes e chave de assinatura, antes do
+  primeiro lançamento.
+
+## Licença
+
+[Apache License 2.0](LICENSE).
