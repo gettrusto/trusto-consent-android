@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (a publicar)
+## 0.1.0
 
 - Modo sem tela: banner publicado do aplicativo, decisão local, fila de envio com reenvio.
 - `configure`, `loadConfig` e `awaitConfig`, `needsConsent`, `acceptAll`, `rejectAll`, `save`,
