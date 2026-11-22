@@ -67,6 +67,12 @@ class ConsentClientTest {
 
     private val endpoint get() = "http://127.0.0.1:${server.port}"
 
+    /** Sem rede, sem depender do tempo de parada do servidor: toda chamada falha. */
+    private val offlineTransport = object : Transport {
+        override fun get(url: String, headers: Map<String, String>): HttpResponse = throw java.io.IOException("sem rede")
+        override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse = throw java.io.IOException("sem rede")
+    }
+
     private fun client(
         storageDir: File = dir,
         transport: Transport = UrlConnectionTransport(2_000, 2_000),
@@ -289,9 +295,8 @@ class ConsentClientTest {
 
     @Test
     fun `trocar o ambiente da chave descarta banner, decisão e fila do outro`() {
-        val sdk = client()
-        sdk.loadConfigBlocking()
-        server.stop()
+        client().loadConfigBlocking()
+        val sdk = client(transport = offlineTransport)
         sdk.acceptAll()
         assertEquals(1, sdk.pendingCount)
         sdk.close()
@@ -305,9 +310,8 @@ class ConsentClientTest {
 
     @Test
     fun `trocar o coletor descarta só o banner em cache, e a fila segue para o novo`() {
-        val sdk = client()
-        sdk.loadConfigBlocking()
-        server.stop()
+        client().loadConfigBlocking()
+        val sdk = client(transport = offlineTransport)
         sdk.acceptAll()
         sdk.close()
 
@@ -349,16 +353,13 @@ class ConsentClientTest {
 
     @Test
     fun `rotação da chave no mesmo ambiente mantém a fila, enviada com a chave nova`() {
-        val sdk = client()
-        sdk.loadConfigBlocking()
-        server.stop()
-        sdk.acceptAll()
-        sdk.close()
+        client().loadConfigBlocking()
+        // Sem rede: a decisão fica na fila.
+        val offline = client(transport = offlineTransport)
+        offline.acceptAll()
+        assertEquals(1, offline.pendingCount)
+        offline.close()
 
-        server = FakeCollector(port = server.port) { request ->
-            requests.add(request)
-            201 to """{"consentId":"c0ffee00-0000-4000-8000-000000000004","expiresAt":"2027-11-21T00:00:00.000Z"}"""
-        }
         val rotated = "trusto_pk_live_" + "C".repeat(32)
         now += 60 * 60_000
         val next = client(key = rotated)
@@ -366,6 +367,7 @@ class ConsentClientTest {
         assertNotNull(next.currentDecision)
         next.flushBlocking()
         assertEquals(0, next.pendingCount)
+        assertEquals("c0ffee00-0000-4000-8000-000000000000", next.currentDecision!!.consentId)
         assertEquals("Bearer $rotated", requests.last().headers["authorization"])
     }
 
