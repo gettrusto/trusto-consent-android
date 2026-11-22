@@ -186,7 +186,7 @@ lançamento, a partir da `main`, com aprovação obrigatória e tags imutáveis.
 
 ## Pendências
 
-- **Publicação**: a primeira versão (0.1.0) ainda não foi lançada no Maven Central.
+- Nenhuma no momento.
 
 ## Licença
 
