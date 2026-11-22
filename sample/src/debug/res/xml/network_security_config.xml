@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  O Android bloqueia http por padrão (targetSdk 28 em diante), antes da regra do SDK. Para o
+  coletor falso da máquina local, o app de debug libera http só para o endereço do host visto
+  do emulador. Todo o resto continua só https.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

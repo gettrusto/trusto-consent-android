@@ -135,6 +135,41 @@ qualquer `./gradlew`. Depois de mudar uma dependência, regenere o arquivo:
 ./gradlew --write-verification-metadata sha256 :consent:testDebugUnitTest :consent:assembleRelease
 ```
 
+### App de teste
+
+O módulo `sample/` é um aplicativo de teste (`io.gettrusto.consent.sample`) que desenha o
+banner publicado e chama o SDK nos botões: aceitar tudo, recusar tudo, salvar por
+finalidade, revogar e enviar agora, com o estado de `isGranted` e da fila na tela. Ele nunca
+é publicado: o lançamento monta só o `:consent`.
+
+A chave e o coletor vêm do `local.properties`, que fica fora do git:
+
+```properties
+trusto.sample.key=trusto_pk_test_...
+# opcional, o padrão é o coletor de staging
+trusto.sample.endpoint=https://...
+```
+
+Sem chave, o app usa uma chave falsa no formato certo e o coletor responde 401. Para
+exercitar o fluxo inteiro sem chave, suba o coletor falso e toque em "Trocar coletor" (o
+emulador o vê em `http://10.0.2.2:8787`):
+
+```bash
+python3 -I sample/tools/mock-collector.py
+./gradlew :sample:installDebug
+```
+
+O Android bloqueia `http` por padrão antes da regra do SDK: o app de teste libera só
+`10.0.2.2`, e só no debug (`sample/src/debug/res/xml/network_security_config.xml`). Um app
+que queira testar contra um coletor local precisa da mesma liberação.
+
+Para cadastrar o app de teste numa organização, a impressão SHA-256 é a do certificado que
+assina o APK de debug na sua máquina:
+
+```bash
+keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep SHA256
+```
+
 ## Segurança
 
 Vulnerabilidades: veja [SECURITY.md](SECURITY.md). A publicação sai só pela pipeline de
