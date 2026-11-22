@@ -18,6 +18,14 @@ class FakeCollector(port: Int = 0, private val handler: (Request) -> Pair<Int, S
     class Request(val method: String, val path: String, val query: String?, val headers: Map<String, String>, val body: String)
 
     private val socket = ServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
+
+    /**
+     * Parado, nenhuma conexão recebe resposta. Fechar o `ServerSocket` não basta: no Linux do
+     * CI, uma conexão já aceita ou na fila do sistema ainda era atendida, e o teste "sem rede"
+     * via o registro aceito.
+     */
+    @Volatile
+    private var stopped = false
     val port: Int get() = socket.localPort
 
     init {
@@ -33,9 +41,13 @@ class FakeCollector(port: Int = 0, private val handler: (Request) -> Pair<Int, S
         }
     }
 
-    fun stop() = socket.close()
+    fun stop() {
+        stopped = true
+        socket.close()
+    }
 
     private fun serve(client: Socket) = client.use {
+        if (stopped) return
         val input = BufferedInputStream(it.getInputStream())
         val requestLine = readLine(input) ?: return
         val headers = LinkedHashMap<String, String>()
@@ -57,6 +69,7 @@ class FakeCollector(port: Int = 0, private val handler: (Request) -> Pair<Int, S
         val path = target.substringBefore('?')
         val query = if ('?' in target) target.substringAfter('?') else null
         val (status, text) = handler(Request(method, path, query, headers, String(body, 0, read, Charsets.UTF_8)))
+        if (stopped) return
         val bytes = text.toByteArray(Charsets.UTF_8)
         val out = it.getOutputStream()
         out.write("HTTP/1.1 $status X\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())

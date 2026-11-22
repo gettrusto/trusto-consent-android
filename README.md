@@ -28,8 +28,8 @@ dependencies {
 }
 ```
 
-> A publicação no repositório central de pacotes ainda não foi feita. Até lá, use o AAR
-> gerado por `./gradlew :consent:assembleRelease`.
+Os pacotes no Maven Central são assinados com a chave cuja impressão está no
+[SECURITY.md](SECURITY.md).
 
 ## Uso
 
@@ -92,6 +92,10 @@ memória, sem derrubar o aplicativo.
   e é reenviado com espera crescente, de 5 s até 1 h. Se a chave for recusada por um tempo
   (por exemplo, enquanto a posse do aplicativo é reconferida), a espera começa em 1 h.
 - A fila guarda até 50 registros e nenhum com mais de 30 dias.
+- Banner, decisão e fila valem para um ambiente da chave (teste ou produção). Trocar de
+  ambiente na mesma instalação descarta o que veio do outro. Trocar de coletor descarta só o
+  banner em cache; a fila segue para o coletor novo. A rotação da chave mantém tudo, e a fila
+  sai com a chave nova.
 - O reenvio automático vale enquanto o processo do aplicativo está vivo. Quando o aplicativo
   abre de novo, o `configure` retoma a fila.
 - Se o processo morrer entre a confirmação do servidor e a retirada do item da fila, o
@@ -135,6 +139,41 @@ qualquer `./gradlew`. Depois de mudar uma dependência, regenere o arquivo:
 ./gradlew --write-verification-metadata sha256 :consent:testDebugUnitTest :consent:assembleRelease
 ```
 
+### App de teste
+
+O módulo `sample/` é um aplicativo de teste (`io.gettrusto.consent.sample`) que desenha o
+banner publicado e chama o SDK nos botões: aceitar tudo, recusar tudo, salvar por
+finalidade, revogar e enviar agora, com o estado de `isGranted` e da fila na tela. Ele nunca
+é publicado: o lançamento monta só o `:consent`.
+
+A chave e o coletor vêm do `local.properties`, que fica fora do git:
+
+```properties
+trusto.sample.key=trusto_pk_test_...
+# sem ele, o app usa só o coletor falso local
+trusto.sample.endpoint=https://...
+```
+
+Sem chave, o app usa uma chave falsa no formato certo e o coletor responde 401. Para
+exercitar o fluxo inteiro sem chave, suba o coletor falso e toque em "Trocar coletor" (o
+emulador o vê em `http://10.0.2.2:8787`):
+
+```bash
+python3 -I sample/tools/mock-collector.py
+./gradlew :sample:installDebug
+```
+
+O Android bloqueia `http` por padrão antes da regra do SDK: o app de teste libera só
+`10.0.2.2`, e só no debug (`sample/src/debug/res/xml/network_security_config.xml`). Um app
+que queira testar contra um coletor local precisa da mesma liberação.
+
+Para cadastrar o app de teste numa organização, a impressão SHA-256 é a do certificado que
+assina o APK de debug na sua máquina:
+
+```bash
+keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep SHA256
+```
+
 ## Segurança
 
 Vulnerabilidades: veja [SECURITY.md](SECURITY.md). A publicação sai só pela pipeline de
@@ -142,8 +181,7 @@ lançamento, a partir da `main`, com aprovação obrigatória e tags imutáveis.
 
 ## Pendências
 
-- **Publicação**: conta no repositório central de pacotes e chave de assinatura, antes do
-  primeiro lançamento.
+- **Publicação**: a primeira versão (0.1.0) ainda não foi lançada no Maven Central.
 
 ## Licença
 

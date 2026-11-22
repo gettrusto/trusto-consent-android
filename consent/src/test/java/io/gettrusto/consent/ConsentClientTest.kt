@@ -67,7 +67,18 @@ class ConsentClientTest {
 
     private val endpoint get() = "http://127.0.0.1:${server.port}"
 
-    private fun client(storageDir: File = dir, transport: Transport = UrlConnectionTransport(2_000, 2_000)): ConsentClient =
+    /** Sem rede, sem depender do tempo de parada do servidor: toda chamada falha. */
+    private val offlineTransport = object : Transport {
+        override fun get(url: String, headers: Map<String, String>): HttpResponse = throw java.io.IOException("sem rede")
+        override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse = throw java.io.IOException("sem rede")
+    }
+
+    private fun client(
+        storageDir: File = dir,
+        transport: Transport = UrlConnectionTransport(2_000, 2_000),
+        key: String = this.key,
+        endpoint: String = this.endpoint,
+    ): ConsentClient =
         ConsentClient(
             key = key,
             endpoint = endpoint,
@@ -280,6 +291,84 @@ class ConsentClientTest {
         next.flushBlocking()
         assertEquals(0, next.pendingCount)
         assertEquals("c0ffee00-0000-4000-8000-000000000003", next.currentDecision!!.consentId)
+    }
+
+    @Test
+    fun `trocar o ambiente da chave descarta banner, decisão e fila do outro`() {
+        client().loadConfigBlocking()
+        val sdk = client(transport = offlineTransport)
+        sdk.acceptAll()
+        assertEquals(1, sdk.pendingCount)
+        sdk.close()
+
+        val test = client(key = "trusto_pk_test_" + "B".repeat(32))
+        assertEquals(0, test.pendingCount)
+        assertNull(test.currentDecision)
+        assertNull(test.lastConfig)
+        assertTrue(test.needsConsent)
+    }
+
+    @Test
+    fun `trocar o coletor descarta só o banner em cache, e a fila segue para o novo`() {
+        client().loadConfigBlocking()
+        val sdk = client(transport = offlineTransport)
+        sdk.acceptAll()
+        sdk.close()
+
+        val other = client(endpoint = "https://consent.example")
+        assertNull(other.lastConfig)
+        assertEquals(1, other.pendingCount)
+        assertNotNull(other.currentDecision)
+    }
+
+    @Test
+    fun `maiúsculas no host não mudam o coletor`() {
+        assertEquals(ConsentClient.collectorOf("https://consent.example/x"), ConsentClient.collectorOf("HTTPS://Consent.Example/x/"))
+    }
+
+    @Test
+    fun `instância encerrada não regrava a fila depois da troca de ambiente`() {
+        val pending = ArrayDeque<Runnable>()
+        val manual = Executors(work = { pending.add(it) }, callbacks = { it.run() }, schedule = { _, _ -> })
+        fun make(k: String) = ConsentClient(k, endpoint, app, UrlConnectionTransport(2_000, 2_000), FileStorage(dir), Clock { now }, manual, allowLocalHttp = true)
+        fun drain() { while (pending.isNotEmpty()) pending.removeFirst().run() }
+
+        respond("/v1/app/records", 503 to "{}")
+        val testKey = "trusto_pk_test_" + "B".repeat(32)
+        val a = make(key)
+        a.loadConfigBlocking()
+        drain()
+        // A nova entra com a limpeza na fila; a anterior ainda grava uma decisão depois dela.
+        val b = make(testKey)
+        a.acceptAll()
+        a.close()
+        drain()
+        assertEquals(0, b.pendingCount)
+
+        val c = make(testKey)
+        assertEquals(0, c.pendingCount)
+        assertNull(c.currentDecision)
+        assertNull(c.lastConfig)
+    }
+
+    @Test
+    fun `rotação da chave no mesmo ambiente mantém a fila, enviada com a chave nova`() {
+        client().loadConfigBlocking()
+        // Sem rede: a decisão fica na fila.
+        val offline = client(transport = offlineTransport)
+        offline.acceptAll()
+        assertEquals(1, offline.pendingCount)
+        offline.close()
+
+        val rotated = "trusto_pk_live_" + "C".repeat(32)
+        now += 60 * 60_000
+        val next = client(key = rotated)
+        assertEquals(1, next.pendingCount)
+        assertNotNull(next.currentDecision)
+        next.flushBlocking()
+        assertEquals(0, next.pendingCount)
+        assertEquals("c0ffee00-0000-4000-8000-000000000000", next.currentDecision!!.consentId)
+        assertEquals("Bearer $rotated", requests.last().headers["authorization"])
     }
 
     @Test

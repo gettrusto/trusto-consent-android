@@ -1,6 +1,7 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
+    `maven-publish`
 }
 
 val sdkVersion = providers.gradleProperty("VERSION_NAME").get()
@@ -32,6 +33,12 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = false
+    }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
     }
 }
 
@@ -65,3 +72,54 @@ val checkAarSize by tasks.registering {
     }
 }
 tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(checkAarSize) }
+
+/**
+ * Pacote para o Maven Central (`io.gettrusto:consent-android`), montado numa pasta local com
+ * os checksums que o repositório central exige. Só plugins do próprio Gradle: o build não
+ * ganha dependência. A assinatura e o envio ficam no job `release`, o único com a chave.
+ */
+val javadocJar by tasks.registering(Jar::class) {
+    // O repositório central exige o javadoc. A documentação da API está no README.
+    archiveClassifier.set("javadoc")
+    from(rootProject.file("README.md"))
+}
+
+publishing {
+    publications {
+        register<MavenPublication>("release") {
+            groupId = "io.gettrusto"
+            artifactId = "consent-android"
+            version = sdkVersion
+            afterEvaluate { from(components["release"]) }
+            artifact(javadocJar)
+            pom {
+                name.set("Trusto Consent SDK for Android")
+                description.set("Consentimento LGPD no aplicativo Android: banner publicado, decisão e prova gravada na Trusto.")
+                url.set("https://github.com/gettrusto/trusto-consent-android")
+                licenses {
+                    license {
+                        name.set("Apache License, Version 2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                    }
+                }
+                developers {
+                    developer {
+                        name.set("Trusto")
+                        organization.set("Trusto")
+                        organizationUrl.set("https://trusto.com.br")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/gettrusto/trusto-consent-android")
+                    connection.set("scm:git:https://github.com/gettrusto/trusto-consent-android.git")
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "bundle"
+            url = uri(layout.buildDirectory.dir("bundle"))
+        }
+    }
+}

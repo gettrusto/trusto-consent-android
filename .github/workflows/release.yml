@@ -1,18 +1,23 @@
 name: Release
 
-# Publicação de uma versão. Só manual e só da `main`.
+# Publicação de uma versão no Maven Central (`io.gettrusto:consent-android`), com tag e
+# release no GitHub. Só manual e só da `main`.
 #
-# Antes de rodar pela primeira vez:
-# - proteções já configuradas no GitHub: `main` só por PR com o CI verde, environment
-#   `release` só da `main` e com aprovador obrigatório, tags imutáveis;
-# - conta no repositório central de pacotes, com segundo fator, e o namespace verificado;
-# - segredos do environment `release`: SIGNING_KEY (chave privada em ASCII), SIGNING_PASSWORD,
-#   REPOSITORY_USERNAME e REPOSITORY_PASSWORD. Nenhum segredo fica no repositório.
-#
-# A etapa de envio ao repositório central é ligada quando a conta existir.
+# - Proteções configuradas no GitHub: `main` só por PR com o CI verde, environment `release`
+#   só da `main` e com aprovador obrigatório, tags imutáveis.
+# - Segredos do environment `release`: SIGNING_KEY (chave privada em ASCII), SIGNING_PASSWORD,
+#   REPOSITORY_USERNAME e REPOSITORY_PASSWORD (token de usuário do Central Portal). Nenhum
+#   segredo fica no repositório. Chave pública: impressão no SECURITY.md.
+# - O envio é `USER_MANAGED`: o repositório central valida o pacote e ele fica esperando o
+#   botão Publish no portal. Nada chega aos clientes sem esse segundo passo humano.
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Versão a lançar (x.y.z), igual ao VERSION_NAME do gradle.properties e ao CHANGELOG
+        required: true
+        type: string
 
 permissions: {}
 
@@ -33,15 +38,22 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4.4.3
-      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease --no-daemon
+      - name: Conferir a versão
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "versão inválida"; exit 1; }
+          grep -qx "VERSION_NAME=$VERSION" gradle.properties || { echo "VERSION_NAME difere de $VERSION"; exit 1; }
+          grep -Eq "^## ${VERSION//./\\.}( |$)" CHANGELOG.md || { echo "CHANGELOG sem a seção $VERSION"; exit 1; }
+      - run: ./gradlew :consent:testDebugUnitTest :consent:assembleRelease :consent:publishReleasePublicationToBundleRepository --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: consent-unsigned
-          path: consent/build/outputs/aar/consent-release.aar
+          name: consent-bundle
+          path: consent/build/bundle
           if-no-files-found: error
 
-  # Assina e atesta o AAR que o job anterior construiu. Nada do código do repositório roda
-  # aqui: o checkout não é feito, e a chave só existe neste job.
+  # Assina, atesta e envia o pacote que o job anterior montou. Nada do código do repositório
+  # roda aqui: o checkout não é feito, e a chave e o token só existem neste job.
   release:
     needs: verify
     if: github.ref == 'refs/heads/main'
@@ -51,30 +63,87 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: consent-unsigned
-          path: out
-      - name: Assinar o AAR
+          name: consent-bundle
+          path: bundle
+      - name: Assinar o pacote
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           test -n "$SIGNING_KEY" || { echo "SIGNING_KEY ausente"; exit 1; }
+          dir="bundle/io/gettrusto/consent-android/$VERSION"
+          test -f "$dir/consent-android-$VERSION.aar" || { echo "pacote $VERSION ausente"; exit 1; }
+          # O metadado da pasta é do repositório local; o repositório central gera o dele.
+          rm -f bundle/io/gettrusto/consent-android/maven-metadata.xml*
           export GNUPGHOME="$(mktemp -d)"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
           printf '%s' "$SIGNING_KEY" | gpg --batch --import
-          # Senha pela entrada padrão: nunca na linha de comando, visível na lista de processos.
-          printf '%s' "$SIGNING_PASSWORD" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
-            --armor --detach-sign out/consent-release.aar
-          rm -rf "$GNUPGHOME"
-      # Proveniência verificável do artefato, ligada a este commit e a este workflow.
+          for f in "$dir"/*; do
+            case "$f" in *.md5|*.sha1|*.sha256|*.sha512) continue ;; esac
+            # Senha pela entrada padrão: nunca na linha de comando, visível na lista de processos.
+            printf '%s' "$SIGNING_PASSWORD" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              --armor --detach-sign "$f"
+          done
+          (cd bundle && zip -qr ../central-bundle.zip io)
+      # Proveniência verificável do AAR, ligada a este commit e a este workflow.
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: out/consent-release.aar
+          subject-path: |
+            bundle/io/gettrusto/consent-android/${{ inputs.version }}/*.aar
+            bundle/io/gettrusto/consent-android/${{ inputs.version }}/*.pom
+            bundle/io/gettrusto/consent-android/${{ inputs.version }}/*.module
+            bundle/io/gettrusto/consent-android/${{ inputs.version }}/*.jar
+      - name: Enviar ao Maven Central
+        env:
+          REPOSITORY_USERNAME: ${{ secrets.REPOSITORY_USERNAME }}
+          REPOSITORY_PASSWORD: ${{ secrets.REPOSITORY_PASSWORD }}
+        run: |
+          test -n "$REPOSITORY_USERNAME" || { echo "REPOSITORY_USERNAME ausente"; exit 1; }
+          # Token num arquivo de cabeçalho: fora da linha de comando e do log.
+          auth="$(mktemp)"
+          trap 'rm -f "$auth"' EXIT
+          printf 'Authorization: Bearer %s\n' "$(printf '%s:%s' "$REPOSITORY_USERNAME" "$REPOSITORY_PASSWORD" | base64 -w0)" > "$auth"
+          id="$(curl -fsS -H @"$auth" -F "bundle=@central-bundle.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?name=consent-android-$VERSION&publishingType=USER_MANAGED")"
+          [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { echo "resposta do envio fora do formato"; exit 1; }
+          echo "Envio: $id"
+          for _ in $(seq 1 60); do
+            state="$(curl -fsS -X POST -H @"$auth" "https://central.sonatype.com/api/v1/publisher/status?id=$id" | jq -r .deploymentState)"
+            echo "Estado: $state"
+            case "$state" in
+              VALIDATED) echo "Validado. Publique no portal (Deployments) para liberar aos clientes."; exit 0 ;;
+              FAILED) echo "Recusado pelo repositório central: veja o motivo no portal."; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "Validação sem resposta em 10 minutos: confira no portal."; exit 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: consent-release
-          path: |
-            out/consent-release.aar
-            out/consent-release.aar.asc
+          path: central-bundle.zip
+
+  # Tag e release do GitHub no commit testado, depois de o repositório central validar o
+  # pacote. Sem nenhum segredo: só o token do próprio workflow, com escrita no repositório. A
+  # tag é imutável, então uma versão validada e não publicada no portal sai na versão seguinte.
+  tag:
+    needs: release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Tag e release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="$VERSION" 'index($0, "## " v)==1{flag=1;next}/^## /{flag=0}flag' CHANGELOG.md > notes.md
+          gh release create "$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md
